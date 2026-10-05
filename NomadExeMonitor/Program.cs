@@ -469,47 +469,113 @@ internal static class OutputWriter
 
     private static void WriteTable(Snapshot snapshot, Options options)
     {
-        Console.WriteLine($"Nomad EXE Monitor  {snapshot.GeneratedAt:yyyy-MM-dd HH:mm:ss zzz}");
-        Console.WriteLine($"Nomad: {snapshot.NomadAddress}   Namespace: {snapshot.Namespace}");
+        var outputWidth = GetOutputWidth(options.Wide ? 165 : 122);
+
+        WriteConsoleLine($"Nomad EXE Monitor  {snapshot.GeneratedAt:yyyy-MM-dd HH:mm:ss zzz}", outputWidth);
+        WriteConsoleLine($"Nomad: {snapshot.NomadAddress}   Namespace: {snapshot.Namespace}", outputWidth);
         Console.WriteLine();
 
         if (options.Wide)
         {
-            Console.WriteLine(
+            WriteConsoleLine(
                 $"{Fit("STATUS", 9)} {Fit("EXE", 26)} {Fit("JOB", 22)} {Fit("SERVER", 20)} " +
-                $"{Fit("NS", 12)} {Fit("TASK", 18)} {Fit("RESTART", 7)} {Fit("STARTED", 19)} {Fit("LAST EVENT", 18)} DETAIL");
-            Console.WriteLine(new string('-', 165));
+                $"{Fit("NS", 12)} {Fit("TASK", 18)} {Fit("RESTART", 7)} {Fit("STARTED", 19)} {Fit("LAST EVENT", 18)} DETAIL",
+                outputWidth);
+            Console.WriteLine(new string('-', outputWidth));
 
             foreach (var row in snapshot.Rows)
             {
-                Console.WriteLine(
+                WriteConsoleLine(
                     $"{Fit(row.Status.ToString(), 9)} {Fit(row.Exe, 26)} {Fit(row.Job, 22)} {Fit(row.Server, 20)} " +
                     $"{Fit(row.Namespace, 12)} {Fit(row.Task, 18)} {Fit(row.Restarts.ToString(CultureInfo.InvariantCulture), 7)} " +
-                    $"{Fit(FormatTime(row.StartedAt), 19)} {Fit(row.LastEvent, 18)} {row.LastEventMessage}");
+                    $"{Fit(FormatTime(row.StartedAt), 19)} {Fit(row.LastEvent, 18)} {row.LastEventMessage}",
+                    outputWidth);
+            }
+        }
+        else if (outputWidth < 100)
+        {
+            // On a narrow console, keep the identifying columns and omit the
+            // restart/time columns so every allocation still fits on one line.
+            const int statusWidth = 7;
+            var variableWidth = Math.Max(3, outputWidth - statusWidth - 3);
+            var exeWidth = Math.Max(1, variableWidth * 40 / 100);
+            var jobWidth = Math.Max(1, variableWidth * 30 / 100);
+            var serverWidth = Math.Max(1, variableWidth - exeWidth - jobWidth);
+
+            WriteConsoleLine(
+                $"{Fit("STATUS", statusWidth)} {Fit("EXE", exeWidth)} {Fit("JOB", jobWidth)} {Fit("SERVER", serverWidth)}",
+                outputWidth);
+            Console.WriteLine(new string('-', outputWidth));
+
+            foreach (var row in snapshot.Rows)
+            {
+                WriteConsoleLine(
+                    $"{Fit(row.Status.ToString(), statusWidth)} {Fit(row.Exe, exeWidth)} {Fit(row.Job, jobWidth)} {Fit(row.Server, serverWidth)}",
+                    outputWidth);
             }
         }
         else
         {
-            Console.WriteLine(
-                $"{Fit("STATUS", 9)} {Fit("EXE", 30)} {Fit("JOB", 26)} {Fit("SERVER", 24)} {Fit("RESTART", 7)} {Fit("STARTED", 19)}");
-            Console.WriteLine(new string('-', 122));
+            const int statusWidth = 7;
+            const int restartWidth = 7;
+            const int startedWidth = 19;
+            var variableWidth = outputWidth - statusWidth - restartWidth - startedWidth - 5;
+            var exeWidth = Math.Max(1, variableWidth * 40 / 100);
+            var jobWidth = Math.Max(1, variableWidth * 30 / 100);
+            var serverWidth = Math.Max(1, variableWidth - exeWidth - jobWidth);
+
+            WriteConsoleLine(
+                $"{Fit("STATUS", statusWidth)} {Fit("EXE", exeWidth)} {Fit("JOB", jobWidth)} {Fit("SERVER", serverWidth)} " +
+                $"{Fit("RESTART", restartWidth)} {Fit("STARTED", startedWidth)}",
+                outputWidth);
+            Console.WriteLine(new string('-', outputWidth));
 
             foreach (var row in snapshot.Rows)
             {
-                Console.WriteLine(
-                    $"{Fit(row.Status.ToString(), 9)} {Fit(row.Exe, 30)} {Fit(row.Job, 26)} {Fit(row.Server, 24)} " +
-                    $"{Fit(row.Restarts.ToString(CultureInfo.InvariantCulture), 7)} {Fit(FormatTime(row.StartedAt), 19)}");
+                WriteConsoleLine(
+                    $"{Fit(row.Status.ToString(), statusWidth)} {Fit(row.Exe, exeWidth)} {Fit(row.Job, jobWidth)} {Fit(row.Server, serverWidth)} " +
+                    $"{Fit(row.Restarts.ToString(CultureInfo.InvariantCulture), restartWidth)} {Fit(FormatTime(row.StartedAt), startedWidth)}",
+                    outputWidth);
             }
         }
 
         Console.WriteLine();
-        Console.WriteLine(
+        WriteConsoleLine(
             $"Total: {snapshot.Rows.Count}  " +
             $"Running: {snapshot.Rows.Count(r => r.Status == AppStatus.Running)}  " +
             $"Failed: {snapshot.Rows.Count(r => r.Status == AppStatus.Failed)}  " +
             $"Stopped: {snapshot.Rows.Count(r => r.Status == AppStatus.Stopped)}  " +
             $"Pending: {snapshot.Rows.Count(r => r.Status == AppStatus.Pending)}  " +
-            $"Unknown: {snapshot.Rows.Count(r => r.Status == AppStatus.Unknown)}");
+            $"Unknown: {snapshot.Rows.Count(r => r.Status == AppStatus.Unknown)}",
+            outputWidth);
+    }
+
+    private static int GetOutputWidth(int redirectedFallback)
+    {
+        if (Console.IsOutputRedirected)
+            return redirectedFallback;
+
+        try
+        {
+            // Leave one column unused because some terminals wrap immediately
+            // when the cursor reaches the last visible column.
+            return Math.Max(1, Console.WindowWidth - 1);
+        }
+        catch
+        {
+            return redirectedFallback;
+        }
+    }
+
+    private static void WriteConsoleLine(string value, int width)
+    {
+        if (Console.IsOutputRedirected || value.Length <= width)
+        {
+            Console.WriteLine(value);
+            return;
+        }
+
+        Console.WriteLine(Fit(value, width));
     }
 
     private static void WriteCsv(IEnumerable<AppRow> rows)
