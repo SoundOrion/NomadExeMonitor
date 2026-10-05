@@ -58,6 +58,12 @@ internal static class Program
             {
                 var useInteractiveRenderer =
                     !Console.IsOutputRedirected && options.Format == OutputFormat.Table;
+
+                // Clear explanatory text or previous commands once before the first
+                // frame. Subsequent refreshes overwrite in place to avoid flicker.
+                if (useInteractiveRenderer)
+                    Console.Clear();
+
                 using var renderer = useInteractiveRenderer
                     ? new ConsoleFrameRenderer()
                     : null;
