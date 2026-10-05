@@ -280,15 +280,21 @@ internal static class MonitorService
     private static List<Allocation> SelectCurrentAllocations(List<Allocation> allocations)
     {
         // Allocation names are stable logical slots such as job.group[0].
+        // For system/sysbatch jobs, however, the same logical slot exists once per
+        // eligible node, so the node must also be part of the identity. For other job
+        // types it must not be included, otherwise a reschedule to another node would
+        // leave the old allocation visible as another current row.
+        //
         // During rolling updates/reschedules several historical allocations can exist
-        // for the same slot. Prefer the leaf of NextAllocation if that relationship is
-        // available; otherwise select the newest ModifyIndex/ModifyTime for that slot.
+        // for the same identity. Prefer the leaf of NextAllocation if that relationship
+        // is available; otherwise select the newest ModifyIndex/ModifyTime.
         return allocations
             .GroupBy(a => new
             {
                 Namespace = a.Namespace ?? "default",
                 a.JobID,
                 a.TaskGroup,
+                Node = IsPerNodeJob(a.JobType) ? NodeIdentity(a) : string.Empty,
                 Identity = string.IsNullOrWhiteSpace(a.Name) ? a.ID : a.Name
             })
             .Select(group =>
@@ -306,6 +312,22 @@ internal static class MonitorService
                     .First();
             })
             .ToList();
+    }
+
+    private static bool IsPerNodeJob(string? jobType) =>
+        string.Equals(jobType, "system", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(jobType, "sysbatch", StringComparison.OrdinalIgnoreCase);
+
+    private static string NodeIdentity(Allocation allocation)
+    {
+        if (!string.IsNullOrWhiteSpace(allocation.NodeID))
+            return allocation.NodeID;
+
+        if (!string.IsNullOrWhiteSpace(allocation.NodeName))
+            return allocation.NodeName;
+
+        // Do not collapse allocations when Nomad omitted both node fields.
+        return allocation.ID;
     }
 
     private static DateTimeOffset? NormalizeDate(DateTimeOffset? value)
@@ -864,6 +886,7 @@ internal class Allocation
     public string ID { get; set; } = "";
     public string Name { get; set; } = "";
     public string JobID { get; set; } = "";
+    public string JobType { get; set; } = "";
     public string? Namespace { get; set; }
     public string TaskGroup { get; set; } = "";
     public string? NodeID { get; set; }
