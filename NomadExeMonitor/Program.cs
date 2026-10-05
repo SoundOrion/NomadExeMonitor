@@ -56,14 +56,20 @@ internal static class Program
 
             if (options.WatchSeconds > 0)
             {
+                var useInteractiveRenderer =
+                    !Console.IsOutputRedirected && options.Format == OutputFormat.Table;
+                using var renderer = useInteractiveRenderer
+                    ? new ConsoleFrameRenderer()
+                    : null;
+
                 while (!cts.IsCancellationRequested)
                 {
                     var snapshot = await MonitorService.BuildSnapshotAsync(client, options, cts.Token);
 
-                    if (!Console.IsOutputRedirected && options.Format == OutputFormat.Table)
-                        Console.Clear();
-
-                    OutputWriter.Write(snapshot, options, JsonOptions);
+                    if (renderer is not null)
+                        renderer.Render(() => OutputWriter.Write(snapshot, options, JsonOptions));
+                    else
+                        OutputWriter.Write(snapshot, options, JsonOptions);
 
                     await Task.Delay(TimeSpan.FromSeconds(options.WatchSeconds), cts.Token);
                 }
@@ -614,6 +620,151 @@ internal static class OutputWriter
 
     private static string FormatTime(DateTimeOffset? value) =>
         value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+}
+
+internal sealed class ConsoleFrameRenderer : IDisposable
+{
+    private int _top;
+    private int _previousLineCount;
+    private readonly bool? _originalCursorVisible;
+
+    public ConsoleFrameRenderer()
+    {
+        try
+        {
+            _top = Console.CursorTop;
+        }
+        catch
+        {
+            _top = 0;
+        }
+
+        try
+        {
+            _originalCursorVisible = Console.CursorVisible;
+            Console.CursorVisible = false;
+        }
+        catch
+        {
+            // Cursor visibility is not supported by every terminal host.
+        }
+    }
+
+    public void Render(Action render)
+    {
+        using var buffer = new StringWriter(CultureInfo.InvariantCulture);
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+
+        try
+        {
+            Console.SetOut(buffer);
+            Console.SetError(buffer);
+            render();
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+
+        WriteFrame(buffer.ToString());
+    }
+
+    private void WriteFrame(string frame)
+    {
+        var normalized = frame
+            .TrimEnd('\r', '\n')
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+        var lines = normalized.Length == 0 ? new[] { string.Empty } : normalized.Split('\n');
+        var width = GetConsoleWidth();
+        var lineCount = Math.Max(lines.Length, _previousLineCount);
+        var output = new StringBuilder();
+
+        for (var i = 0; i < lineCount; i++)
+        {
+            var line = i < lines.Length ? FitLine(lines[i], width) : string.Empty;
+            output.Append(line.PadRight(width));
+
+            if (i < lineCount - 1)
+                output.AppendLine();
+        }
+
+        try
+        {
+            Console.SetCursorPosition(0, _top);
+            Console.Write(output.ToString());
+
+            // If the console buffer scrolled, keep the next frame anchored to the
+            // actual first row of the frame rather than the original buffer row.
+            _top = Math.Max(0, Console.CursorTop - (lineCount - 1));
+        }
+        catch
+        {
+            // If cursor positioning becomes unavailable (for example after a host
+            // resize), continue by appending the frame instead of terminating watch.
+            Console.WriteLine(normalized);
+            try
+            {
+                _top = Console.CursorTop;
+            }
+            catch
+            {
+                _top = 0;
+            }
+        }
+
+        _previousLineCount = lines.Length;
+    }
+
+    private static int GetConsoleWidth()
+    {
+        try
+        {
+            return Math.Max(1, Console.WindowWidth - 1);
+        }
+        catch
+        {
+            return 120;
+        }
+    }
+
+    private static string FitLine(string value, int width)
+    {
+        if (value.Length <= width)
+            return value;
+        if (width <= 1)
+            return value[..width];
+        return value[..(width - 1)] + "…";
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            var nextLine = Math.Min(
+                Console.BufferHeight - 1,
+                _top + Math.Max(1, _previousLineCount));
+            Console.SetCursorPosition(0, nextLine);
+        }
+        catch
+        {
+            // Best effort only; the host may already be shutting down.
+        }
+
+        if (_originalCursorVisible is not null)
+        {
+            try
+            {
+                Console.CursorVisible = _originalCursorVisible.Value;
+            }
+            catch
+            {
+                // Best effort only.
+            }
+        }
+    }
 }
 
 internal sealed class NomadClient : IDisposable
