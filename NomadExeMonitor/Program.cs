@@ -632,6 +632,7 @@ internal sealed class ConsoleFrameRenderer : IDisposable
 {
     private int _top;
     private int _previousLineCount;
+    private int _previousWidth;
     private readonly bool? _originalCursorVisible;
 
     public ConsoleFrameRenderer()
@@ -685,6 +686,10 @@ internal sealed class ConsoleFrameRenderer : IDisposable
             .Replace('\r', '\n');
         var lines = normalized.Length == 0 ? new[] { string.Empty } : normalized.Split('\n');
         var width = GetConsoleWidth();
+
+        if (_previousWidth > 0 && _previousWidth != width)
+            ResetAfterResize();
+
         var lineCount = Math.Max(lines.Length, _previousLineCount);
         var output = new StringBuilder();
 
@@ -722,6 +727,34 @@ internal sealed class ConsoleFrameRenderer : IDisposable
         }
 
         _previousLineCount = lines.Length;
+        _previousWidth = width;
+    }
+
+    private void ResetAfterResize()
+    {
+        try
+        {
+            // Text written with the old width may have been reflowed by the terminal,
+            // so clearing is the only reliable way to remove all stale fragments.
+            // This happens only when the console width actually changes.
+            Console.Clear();
+            _top = 0;
+        }
+        catch
+        {
+            // If clearing is unavailable, start the next frame at the current cursor
+            // position so stale text is left above instead of mixed into the new frame.
+            try
+            {
+                _top = Console.CursorTop;
+            }
+            catch
+            {
+                _top = 0;
+            }
+        }
+
+        _previousLineCount = 0;
     }
 
     private static int GetConsoleWidth()
